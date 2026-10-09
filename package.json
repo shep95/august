@@ -1,0 +1,13 @@
+{
+  "name": "meme-coin-domain-map",
+  "version": "0.1.0",
+  "description": "Browser extension that scores meme coin risk, classifies narrative, lifecycle phase and pre-collapse signals on meme coin trading sites.",
+  "private": true,
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\"",
+    "icons": "node tools/make-icons.js",
+    "check": "node tools/check.js",
+    "zip": "node tools/zip.js"
+  },
+  "license": "MIT"
+}

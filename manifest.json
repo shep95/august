@@ -1,0 +1,83 @@
+{
+  "manifest_version": 3,
+  "name": "Meme Coin Domain Map",
+  "short_name": "MemeMap",
+  "version": "0.1.0",
+  "description": "Risk scoring, narrative classification, lifecycle phase and pre-collapse checks for meme coin trading sites. Activates automatically on pump.fun, DexScreener, GMGN, Photon, BullX, Axiom, Birdeye, four.meme and more.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://api.dexscreener.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background/service-worker.js"
+  },
+  "action": {
+    "default_title": "Meme Coin Domain Map",
+    "default_popup": "src/popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://pump.fun/*",
+        "https://*.pump.fun/*",
+        "https://dexscreener.com/*",
+        "https://www.dextools.io/*",
+        "https://gmgn.ai/*",
+        "https://photon-sol.tinyastro.io/*",
+        "https://*.bullx.io/*",
+        "https://bullx.io/*",
+        "https://axiom.trade/*",
+        "https://*.axiom.trade/*",
+        "https://birdeye.so/*",
+        "https://www.birdeye.so/*",
+        "https://four.meme/*",
+        "https://www.four.meme/*",
+        "https://moonshot.cc/*",
+        "https://dexlab.space/*",
+        "https://solscan.io/*",
+        "https://basescan.org/*",
+        "https://bscscan.com/*",
+        "https://jup.ag/*",
+        "https://raydium.io/*",
+        "https://app.meteora.ag/*",
+        "https://app.uniswap.org/*",
+        "https://rugcheck.xyz/*",
+        "https://www.geckoterminal.com/*",
+        "https://neo.bullx.io/*",
+        "https://trojan.app/*",
+        "https://ston.fi/*",
+        "https://app.ston.fi/*",
+        "https://dedust.io/*"
+      ],
+      "js": [
+        "src/shared/taxonomy.js",
+        "src/shared/engine.js",
+        "src/content/adapters.js",
+        "src/content/panel.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/content/panel.css"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
+}
