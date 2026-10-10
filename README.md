@@ -79,15 +79,36 @@ test/                         node:test suites for engine and adapters
 ## Development
 
 ```
-npm test        # engine + adapter tests (node >= 20, no dependencies)
+npm test        # engine + adapter + DexScreener normaliser tests (node >= 20, no dependencies)
 npm run check   # parse every JS file, verify manifest references
+npm run e2e     # browser test: loads the extension in Chromium (needs `npm i -D playwright`)
 npm run icons   # regenerate icons/
 npm run zip     # package dist/meme-coin-domain-map-<version>.zip
 ```
 
+The browser test stubs the DexScreener network inside the service worker and serves mock
+coin pages at the real site URLs, so it runs offline. It covers: service-worker input
+validation, fetch + normalisation, pair→token fallback, SPA navigation detection, hostile
+page text (no HTML injection, out-of-range values dropped), hostile API URLs dropped,
+page-sourced labelling, collapse / side / hide controls, popup tabs and classifier, the
+no-token empty state and storage key hygiene.
+
 The engine and taxonomy are plain UMD modules so the same files run in content scripts, the
 popup and node tests. Adding a narrative keyword, a chain or a signal is a data edit in
 `src/shared/taxonomy.js`.
+
+## Security notes
+
+- Permissions are `storage` only, plus host access to `api.dexscreener.com`. No tabs, history
+  or cookies access, no remote code, no inline scripts.
+- Everything rendered comes through `textContent`; the panel never uses `innerHTML` with data.
+- Token addresses and chains are shape-validated before they become storage keys or API
+  paths, in both the content script and the service worker. The service worker rejects
+  malformed messages and bounds its cache.
+- The only outbound link is rendered when the API URL is `https://dexscreener.com/...`.
+- Values scraped from the host page are labelled `page:` in the panel because a site can
+  print anything. Treat them as hints and verify on-chain.
+- Per-token overrides are capped at 200 entries in `chrome.storage.local`.
 
 ## Limitations
 
