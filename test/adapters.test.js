@@ -138,3 +138,41 @@ test('scrapeText is bounded on hostile input', () => {
   A.scrapeText(big);
   assert.ok(Date.now() - t0 < 2000, 'no catastrophic backtracking');
 });
+
+test('explorer wallet / tx pages never produce a lookup address (privacy)', () => {
+  const SIG = '5' + 'a'.repeat(87);
+  for (const u of [
+    'https://solscan.io/account/' + SOL, 'https://solscan.io/tx/' + SIG, 'https://solscan.io/address/' + SOL,
+    'https://basescan.org/address/' + EVM, 'https://basescan.org/tx/0x' + 'a'.repeat(64), 'https://bscscan.com/address/' + EVM,
+    'https://solscan.io/' + SOL, 'https://gmgn.ai/sol/address/' + SOL, 'https://pump.fun/profile/' + SOL + '?tx=' + SIG,
+    'https://birdeye.so/profile/' + SOL + '?chain=solana', 'https://dexscreener.com/solana/tx/' + SIG
+  ]) assert.equal(A.parseUrl(u).address, null, u);
+  assert.equal(A.parseUrl('https://solscan.io/token/' + SOL).address, SOL);
+  assert.equal(A.parseUrl('https://solscan.io/token/' + SOL + '#holders').address, SOL);
+  assert.equal(A.parseUrl('https://basescan.org/token/' + EVM + '?a=1').address, EVM);
+});
+
+test('address regexes are anchored: hashes are not truncated into addresses', () => {
+  assert.equal(A.addressFromText('0x' + 'a'.repeat(64), 'base'), null);
+  assert.equal(A.addressFromText('5' + 'a'.repeat(87), 'solana'), null);
+  assert.equal(A.addressFromText('/x/' + SOL + '/y', 'solana').address, SOL);
+  assert.equal(A.addressFromText('?a=' + EVM + '&b', 'base').address, EVM);
+});
+
+test('holders regex is linear on whitespace runs (ReDoS)', () => {
+  for (const ws of [' ', ' ', '\t']) {
+    const text = 'holder' + ws.repeat(45000) + 'x';
+    const t0 = process.hrtime.bigint();
+    A.scrapeText(text);
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    assert.ok(ms < 100, 'took ' + ms + 'ms for ' + JSON.stringify(ws));
+  }
+});
+
+test('chainFromDexscreener only returns known chains', () => {
+  assert.equal(A.chainFromDexscreener('solana'), 'solana');
+  assert.equal(A.chainFromDexscreener('constructor'), null);
+  assert.equal(A.chainFromDexscreener('__proto__'), null);
+  assert.equal(A.chainFromDexscreener(undefined), null);
+  assert.equal(A.launchpadFromDex({ toString: () => 'pumpfun' }, 'notarray'), null);
+});

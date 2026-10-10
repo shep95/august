@@ -1,10 +1,14 @@
-// Browser end-to-end test. Loads the unpacked extension in Chromium via Playwright,
-// stubs the DexScreener network inside the service worker, serves mock coin pages at the
-// real site URLs, and checks rendering, scraping, navigation, controls, storage and
-// hostile-input handling. Run: npm run e2e   (needs: npm i -D playwright, and a Chromium)
+// Browser end-to-end test. Loads the unpacked extension in Chromium via Playwright, stubs the
+// DexScreener network inside the service worker, serves mock coin pages at the real site URLs
+// and checks rendering, scraping, navigation, controls, storage and hostile-input handling.
+// The panel lives in a CLOSED shadow root, so the test reads it through the DevTools protocol
+// (DOM.getDocument pierce) and drives controls with real Input events — exactly what a page
+// cannot do. Run: npm run e2e   (needs `npm i -D playwright` and a Chromium)
+'use strict';
 const { chromium } = require('playwright');
+const path = require('path'), os = require('os'), fs = require('fs');
+
 (async () => {
-  const path = require('path'), os = require('os'), fs = require('fs');
   const ext = path.join(__dirname, '..');
   const S = fs.mkdtempSync(path.join(os.tmpdir(), 'mct-e2e-'));
   const ctx = await chromium.launchPersistentContext(path.join(S, 'profile'), { headless: true, channel: 'chromium', args: ['--disable-extensions-except=' + ext, '--load-extension=' + ext] });
@@ -13,71 +17,130 @@ const { chromium } = require('playwright');
   const errors = [];
   const fail = (m) => { errors.push(m); console.log('FAIL', m); };
   const ok = (m) => console.log('ok  ', m);
+  const VALID = 'GooDGooD' + 'A'.repeat(32);
 
-  // --- service worker: stub network, exercise fetch wiring + validation
-  await sw.evaluate(() => {
-    self.__orig = self.fetch;
-    self.fetch = async (url) => {
-      if (/\/tokens\/GooDGooD/.test(url) || /\/pairs\/solana\/GooDGooD/.test(url)) return new Response(JSON.stringify({ pairs: [{ chainId: 'solana', dexId: 'pumpfun', pairAddress: 'P', url: 'https://dexscreener.com/solana/P', baseToken: { address: 'GooDGooD', symbol: 'TEST', name: 'Test Dog' }, priceUsd: '0.5', priceChange: { h1: 10 }, volume: { h1: 50000, h24: 90000 }, liquidity: { usd: 20000 }, marketCap: 40000, pairCreatedAt: Date.now() - 5 * 36e5 }] }), { status: 200, headers: { 'content-type': 'application/json' } });
-      return new Response('{"pairs":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
+  // ---- service worker: stub network
+  await sw.evaluate((VALID) => {
+    self.__pair = () => ({ chainId: 'solana', dexId: 'pumpfun', pairAddress: 'P', url: 'https://dexscreener.com/solana/P', baseToken: { address: VALID, symbol: 'TEST', name: 'Test Dog' }, priceUsd: '0.5', priceChange: { h1: 10 }, volume: { h1: 50000, h24: 90000 }, liquidity: { usd: 20000 }, marketCap: 40000, pairCreatedAt: Date.now() - 5 * 36e5 });
+    self.__mode = 'good';
+    self.fetch = async (url, opts) => {
+      const u = String(url);
+      const body = (o) => new Response(JSON.stringify(o), { status: 200, headers: { 'content-type': 'application/json' } });
+      if (self.__mode === 'hang') return new Promise((_, rej) => { const sig = opts && opts.signal; if (!sig) return; sig.addEventListener('abort', () => rej(sig.reason)); });
+      if (self.__mode === 'huge') return new Response(new ReadableStream({ pull(c) { c.enqueue(new Uint8Array(1 << 20)); } }), { status: 200 });
+      if (self.__mode === 'evil') { const p = self.__pair(); p.url = 'javascript:alert(1)'; p.chainId = '__proto__'; p.labels = 'x'; p.info = { websites: [null] }; return body({ pairs: [p] }); }
+      if (u.includes(VALID)) return body({ pairs: [self.__pair()] });
+      return body({ pairs: [] });
     };
-  });
-  const VALID = 'GooDGooD' + 'A'.repeat(32); // 40 chars base58, valid shape
-  await sw.evaluate(() => { self.fetch = (self.__f = self.fetch); });
-  // adjust stub to key on the valid address
-  await sw.evaluate((VALID) => { const f = self.fetch; self.fetch = (u) => f(String(u).replace(VALID, 'GooDGooD')); }, VALID);
+  }, VALID);
   const good = await sw.evaluate((VALID) => fetchDex('token', 'solana', VALID), VALID);
-  good && good.symbol === 'TEST' && good.metrics.volMcap1h === 1.25 && Math.round(good.metrics.ageHours) === 5 ? ok('sw fetch+normalize: ' + good.symbol + ' vol/mcap ' + good.metrics.volMcap1h) : fail('sw fetch normalize ' + JSON.stringify(good));
+  good && good.symbol === 'TEST' && good.metrics.volMcap1h === 1.25 && Math.round(good.metrics.ageHours) === 5 ? ok('sw fetch+normalize') : fail('sw normalize ' + JSON.stringify(good));
   for (const [k, c, a] of [['token', 'solana', '../../etc'], ['drop', 'solana', VALID], ['token', 'evil', VALID], ['token', 'solana', 'javascript:alert(1)']]) {
     const r = await sw.evaluate(([k, c, a]) => fetchDex(k, c, a).then(() => 'resolved', e => 'rejected:' + e.message), [k, c, a]);
-    r.startsWith('rejected') ? ok('sw rejects ' + k + '/' + c + '/' + a.slice(0, 12) + ' → ' + r) : fail('sw accepted bad input ' + [k, c, a]);
+    r.startsWith('rejected') ? ok('sw rejects ' + k + '/' + c + '/' + a.slice(0, 12)) : fail('sw accepted ' + [k, c, a]);
   }
-  // pair miss falls back to token endpoint
-  const fb = await sw.evaluate((VALID) => fetchDex('pair', 'solana', VALID), VALID);
-  fb && fb.symbol === 'TEST' ? ok('pair→token fallback') : fail('pair fallback');
+  (await sw.evaluate((V) => fetchDex('pair', 'solana', V), VALID)).symbol === 'TEST' ? ok('pair→token fallback') : fail('pair fallback');
+  await sw.evaluate(() => { CACHE = {}; self.__mode = 'huge'; });
+  const huge = await sw.evaluate((V) => fetchDex('token', 'solana', V).then(() => 'resolved', e => e.message), VALID);
+  huge === 'response too large' ? ok('oversized body rejected') : fail('huge body: ' + huge);
+  await sw.evaluate(() => { CACHE = {}; self.__mode = 'hang'; FETCH_TIMEOUT_MS = 300; });
+  const hang = await sw.evaluate((V) => Promise.all([fetchDex('token', 'solana', V), fetchDex('token', 'solana', V)].map(p => p.then(() => 'resolved', e => e.name))), VALID);
+  hang[0] === 'TimeoutError' && hang[1] === 'TimeoutError' ? ok('hanging fetch times out; concurrent calls deduped') : fail('hang: ' + hang);
+  await sw.evaluate(() => { CACHE = {}; self.__mode = 'good'; FETCH_TIMEOUT_MS = 10000; });
 
-  // --- content panel with live (stubbed) market data + hostile page content
+  // ---- content page helpers (CDP, pierces the closed shadow root)
   const page = await ctx.newPage();
   page.on('pageerror', e => fail('pageerror ' + e.message));
   page.on('console', m => { if (m.type() === 'error') fail('console ' + m.text()); });
   page.on('dialog', d => { fail('dialog opened: ' + d.message()); d.dismiss(); });
-  const hostile = `<!doctype html><html><head><title>Test Dog (TEST) | pump.fun</title></head><body>
+  const cdp = await page.context().newCDPSession(page);
+  const scratch = await ctx.newPage();
+  async function shadowRootNode() {
+    const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
+    const stack = [root];
+    while (stack.length) {
+      const n = stack.pop();
+      if (n.nodeName === 'DIV' && n.attributes && n.attributes.includes('mct-host')) return n.shadowRoots && n.shadowRoots[0];
+      (n.children || []).forEach(c => stack.push(c));
+      (n.shadowRoots || []).forEach(c => stack.push(c));
+    }
+    return null;
+  }
+  async function read() {
+    const sr = await shadowRootNode();
+    if (!sr) return { mounted: false };
+    const hostVisible = await page.evaluate(() => { const h = document.getElementById('mct-host'); return !!h && h.style.display !== 'none' && h.shadowRoot === null; });
+    const { outerHTML } = await cdp.send('DOM.getOuterHTML', { nodeId: sr.nodeId });
+    await scratch.setContent('<div id="mct-root">' + outerHTML + '</div>');
+    const r = await scratch.evaluate(() => {
+      const q = s => { const el = document.querySelector(s); return el ? el.textContent.trim() : null; };
+      return { title: q('.title'), score: q('.score-pill'), band: q('.band'), narrative: q('.chip-narr'), phase: q('.phase.active'), error: q('.error'), metrics: [...document.querySelectorAll('.metric')].map(m => m.textContent.replace(/\s+/g, ' ')), link: (document.querySelector('.footer a') || {}).getAttribute ? (document.querySelector('.footer a') || { getAttribute: () => null }).getAttribute('href') : null, sigSrc: [...document.querySelectorAll('.sig-src')].map(e => e.textContent), fired: [...document.querySelectorAll('.sig.fired .sig-label')].map(e => e.textContent), collapsed: !!document.querySelector('.panel.collapsed'), side: (document.querySelector('.panel') || {}).className || null, chips: [...document.querySelectorAll('.header .chip')].map(e => e.textContent), imgs: document.querySelectorAll('img, script').length, verdict: q('.verdict') };
+    });
+    return Object.assign({ mounted: true, visible: hostVisible }, r);
+  }
+  async function clickIn(selector) {
+    const sr = await shadowRootNode();
+    const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: sr.nodeId, selector });
+    if (!nodeId) throw new Error('not found in shadow: ' + selector);
+    await cdp.send('DOM.scrollIntoViewIfNeeded', { nodeId });
+    const { model } = await cdp.send('DOM.getBoxModel', { nodeId });
+    const q = model.content, x = (q[0] + q[2]) / 2, y = (q[1] + q[5]) / 2;
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+    await page.waitForTimeout(150);
+  }
+
+  // ---- hostile mock page at the real URL
+  const hostile = `<!doctype html><html><head><title>Test Dog (TEST) | pump.fun</title></head><body style="margin:0">
     <h1>Test Dog (TEST)</h1><div>bonding curve progress: 12%</div><div>LP burned</div><div>Holders: 300</div>
-    <div>dev 250%</div><div>Top 10 holders -5%</div>
+    <div>dev 250%</div><div>Top 10 holders -5%</div><div>dev 4%</div>
     <div>&lt;img src=x onerror=alert(1)&gt;</div><div>javascript:alert(1)</div>
-    <script>history.pushState({}, '', '/coin/${VALID}'); window.__pushed = true;</script></body></html>`;
+    <div>holder${'&nbsp;'.repeat(60000)}x</div>
+    <script>history.pushState({}, '', '/coin/${VALID}');</script></body></html>`;
   await page.route('https://pump.fun/**', r => r.fulfill({ contentType: 'text/html', body: hostile }));
+  await page.setViewportSize({ width: 1200, height: 900 });
   await page.goto('https://pump.fun/board', { waitUntil: 'load' });
-  await page.waitForTimeout(4000);
-  const read = () => page.evaluate(() => {
-    const host = document.getElementById('mct-host'); if (!host || !host.shadowRoot) return { mounted: false };
-    const r = host.shadowRoot; const q = s => { const el = r.querySelector(s); return el ? el.textContent.trim() : null; };
-    return { mounted: true, visible: host.style.display !== 'none', title: q('.title'), score: q('.score-pill'), band: q('.band'), narrative: q('.chip-narr'), phase: q('.phase.active'), error: q('.error'), metrics: [...r.querySelectorAll('.metric')].map(m => m.textContent.replace(/\s+/g, ' ')), link: (r.querySelector('.footer a') || {}).href || null, sigSrc: [...r.querySelectorAll('.sig-src')].map(e => e.textContent), collapsed: !!r.querySelector('.panel.collapsed'), side: r.querySelector('.panel') ? r.querySelector('.panel').className : null, imgs: r.querySelectorAll('img, script').length };
-  });
+  await page.waitForTimeout(4500);
   let p = await read();
-  p.mounted && p.title === '$TEST' ? ok('SPA pushState navigation detected → $TEST') : fail('spa nav ' + JSON.stringify(p));
+  p.mounted && p.visible ? ok('panel mounted in a CLOSED shadow root (page sees shadowRoot === null)') : fail('mount ' + JSON.stringify(p));
+  p.title === '$TEST' ? ok('SPA pushState navigation detected → $TEST') : fail('spa nav ' + p.title);
   p.imgs === 0 ? ok('no injected img/script nodes from hostile text') : fail('hostile nodes injected');
-  !p.metrics.some(m => /Dev250|Top10-5/.test(m)) ? ok('out-of-range page values discarded') : fail('bad page values kept ' + p.metrics);
-  p.metrics.some(m => /Holders300/.test(m)) ? ok('valid holders kept') : fail('holders lost');
+  !p.metrics.some(m => /250|-5/.test(m)) ? ok('out-of-range page values discarded') : fail('bad page values kept ' + p.metrics);
+  p.metrics.some(m => /Holders \(page\)300/.test(m)) ? ok('valid holders kept and labelled (page)') : fail('holders ' + p.metrics);
+  // API says age 5h and vol/mcap 125%, so exactly those two fire; page text may not clear dev / top10 / LP.
+  p.fired.join() === 'Vol/mcap >100% in 1h,Contract age <24h' && p.sigSrc.slice(0, 3).every(x => x === 'unknown' || /\(unverified\)$/.test(x)) && p.sigSrc[2] === 'page: locked (unverified)' && p.score === '2/10' ? ok('page "LP burned" / "dev 4%" shown as unverified hints, cannot clear a signal; score 2/10 from API only') : fail('page cleared signals ' + JSON.stringify(p.sigSrc) + ' ' + p.fired + ' ' + p.score);
   p.narrative === 'Animal · canine' ? ok('narrative from page title: canine') : fail('narrative ' + p.narrative);
-  p.metrics.some(m => /Mcap\$40.0K/.test(m)) && p.phase === 'Launch' ? ok('market strip populated from stubbed API; phase Launch') : fail('market ' + JSON.stringify(p.metrics) + ' phase ' + p.phase);
+  p.metrics.some(m => /Mcap\$40.0K/.test(m)) && p.phase === 'Launch' ? ok('market strip from stubbed API; phase Launch') : fail('market ' + JSON.stringify(p.metrics) + ' ' + p.phase);
   p.link === 'https://dexscreener.com/solana/P' ? ok('external link validated') : fail('link ' + p.link);
-  p.sigSrc.some(s => /^page:/.test(s)) ? ok('page-sourced values labelled') : fail('labels ' + p.sigSrc);
+  const scrapeMs = await page.evaluate(() => { const t = performance.now(); document.body.innerText; return performance.now() - t; });
+  ok('page with 60k nbsp run did not freeze (innerText ' + scrapeMs.toFixed(0) + 'ms; scrape bounded by unit test)');
 
-  // --- hostile dexscreener url must be dropped
-  await sw.evaluate(() => { const f = self.fetch; self.fetch = async (u) => { const r = await f(u); const j = await r.json(); if (j.pairs[0]) j.pairs[0].url = 'javascript:alert(1)'; return new Response(JSON.stringify(j), { status: 200 }); }; });
-  await sw.evaluate(() => { CACHE = {}; });
-  await page.evaluate(() => document.getElementById('mct-host').shadowRoot.querySelector('.icon-btn[title=Refresh]').click());
-  await page.waitForTimeout(1500);
+  // ---- page cannot tamper: synthetic clicks / shadowRoot access
+  const tamper = await page.evaluate(() => { const h = document.getElementById('mct-host'); return { sr: h.shadowRoot, kids: h.children.length }; });
+  tamper.sr === null && tamper.kids === 0 ? ok('page cannot reach panel internals') : fail('tamper surface ' + JSON.stringify(tamper));
+  await page.evaluate(() => { document.getElementById('mct-host').dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+  p = await read(); !p.collapsed ? ok('synthetic click ignored') : fail('synthetic click collapsed panel');
+
+  // ---- hostile API response: javascript: url, __proto__ chain, bad types
+  await sw.evaluate(() => { CACHE = {}; self.__mode = 'evil'; });
+  await clickIn('.icon-btn[title=Refresh]'); await page.waitForTimeout(800);
   p = await read();
-  p.link === null ? ok('javascript: link from API dropped') : fail('unsafe link rendered ' + p.link);
+  p.link === null && p.mounted && p.score && !p.chips.some(c => /object|function/i.test(c)) ? ok('hostile API response: link dropped, no crash, no proto garbage (chips: ' + p.chips.join('|') + ')') : fail('hostile api ' + JSON.stringify(p));
+  await sw.evaluate(() => { CACHE = {}; self.__mode = 'good'; });
 
-  // --- controls: collapse, side, hide via popup toggle, re-show
-  await page.evaluate(() => document.getElementById('mct-host').shadowRoot.querySelector('.icon-btn[title="Move to other side"]').click());
-  p = await read(); /side-left/.test(p.side) ? ok('side switch') : fail('side ' + p.side);
-  await page.evaluate(() => document.getElementById('mct-host').shadowRoot.querySelector('.icon-btn[title=Collapse]').click());
-  p = await read(); p.collapsed ? ok('collapse') : fail('collapse');
-  await page.evaluate(() => document.getElementById('mct-host').shadowRoot.querySelector('.icon-btn[title=Expand]').click());
+  // ---- real controls through trusted input
+  await clickIn('.sig:nth-child(3)'); p = await read();
+  p.fired.includes('LP unlocked / removable') && p.score === '4/10' ? ok('trusted click sets manual override → 4/10') : fail('override ' + JSON.stringify([p.fired, p.score]));
+  await clickIn('.check:nth-child(1) input'); await clickIn('.check:nth-child(2) input'); p = await read();
+  /HIGHEST-CONFIDENCE/.test(p.verdict) ? ok('checklist: dev sell + LP removal verdict') : fail('verdict ' + p.verdict);
+  await page.reload({ waitUntil: 'load' }); await page.waitForTimeout(4000); p = await read();
+  p.score === '4/10' && /HIGHEST-CONFIDENCE/.test(p.verdict) ? ok('overrides + checklist persist across reload') : fail('persist ' + JSON.stringify([p.score, p.verdict]));
+  await clickIn('.icon-btn[title="Move to other side"]'); p = await read(); /side-left/.test(p.side) ? ok('side switch') : fail('side ' + p.side);
+  await clickIn('.icon-btn[title=Collapse]'); p = await read(); p.collapsed ? ok('collapse') : fail('collapse');
+  await clickIn('.icon-btn[title=Expand]'); p = await read(); !p.collapsed ? ok('expand') : fail('expand');
+
+  // ---- popup
   const popup = await ctx.newPage();
   popup.on('pageerror', e => fail('popup error ' + e.message));
   await popup.goto('chrome-extension://' + id + '/src/popup/popup.html');
@@ -90,16 +153,20 @@ const { chromium } = require('playwright');
   await popup.fill('input[type=text]', '<img src=x onerror=alert(1)> trump'); await popup.press('input[type=text]', 'Enter');
   (await popup.textContent('.card .t')).includes('Political') && (await popup.$$eval('img', x => x.length)) === 0 ? ok('popup classifier input is text-only') : fail('popup xss');
 
-  // --- no-token page
-  await page.route('https://dexscreener.com/**', r => r.fulfill({ contentType: 'text/html', body: '<html><body>board</body></html>' }));
-  await page.goto('https://dexscreener.com/', { waitUntil: 'load' }); await page.waitForTimeout(2500);
-  p = await read(); p.mounted && p.title === 'MemeMap' && p.score === '—' ? ok('no-token page renders empty state') : fail('empty state ' + JSON.stringify(p));
+  // ---- explorer wallet page: no lookup, nothing sent
+  await sw.evaluate(() => { self.__calls = []; const f = self.fetch; self.fetch = (u) => { self.__calls.push(String(u)); return f(u); }; CACHE = {}; });
+  await page.route('https://solscan.io/**', r => r.fulfill({ contentType: 'text/html', body: '<html><body>wallet</body></html>' }));
+  await page.goto('https://solscan.io/account/' + VALID, { waitUntil: 'load' }); await page.waitForTimeout(2500);
+  const calls = await sw.evaluate(() => self.__calls);
+  p = await read();
+  calls.length === 0 && p.title === 'MemeMap' ? ok('wallet page: no API call, empty state') : fail('wallet leak calls=' + JSON.stringify(calls) + ' title=' + p.title);
 
-  // --- storage: no junk keys
+  // ---- storage hygiene
   const keys = await sw.evaluate(() => new Promise(res => chrome.storage.local.get(null, a => res(Object.keys(a)))));
   keys.every(k => k === 'settings' || /^mct:tok:[0-9A-Za-z_-]{32,64}$/.test(k)) ? ok('storage keys well-formed: ' + keys.join(',')) : fail('storage keys ' + keys);
 
   console.log(errors.length ? '\n' + errors.length + ' FAILURE(S)' : '\nALL PASSED');
   await ctx.close();
+  fs.rmSync(S, { recursive: true, force: true });
   process.exit(errors.length ? 1 : 0);
 })().catch(e => { console.error('E2E CRASH', e); process.exit(1); });

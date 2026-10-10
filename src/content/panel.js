@@ -32,13 +32,15 @@
     if (attrs) Object.keys(attrs).forEach(function (k) {
       if (k === 'class') el.className = attrs[k];
       else if (k === 'text') el.textContent = attrs[k];
-      else if (k.indexOf('on') === 0) el.addEventListener(k.slice(2), attrs[k]);
+      else if (k.indexOf('on') === 0) el.addEventListener(k.slice(2), trusted(attrs[k]));
       else if (k === 'style') el.setAttribute('style', attrs[k]);
       else el.setAttribute(k, attrs[k]);
     });
     (children || []).forEach(function (c) { if (c == null) return; el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c); });
     return el;
   }
+  // Only real user input may change state: synthetic events dispatched by the page are ignored.
+  function trusted(fn) { return function (ev) { if (ev && ev.isTrusted === false) return; return fn.apply(this, arguments); }; }
   function fmtUsd(n) {
     if (n == null || !isFinite(n)) return '—';
     if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
@@ -96,8 +98,14 @@
   // ------------------------------------------------------------------
   // Data
   // ------------------------------------------------------------------
+  // Metrics fed to the engine. Page-scraped values are attacker-controlled, so they may
+  // only FIRE a signal (make the score worse), never clear one. API metrics are used as-is.
   function metrics() {
-    var m = Object.assign({}, state.scraped);
+    var sc = state.scraped, m = {};
+    if (sc.devPct > 10) m.devPct = sc.devPct;
+    if (sc.top10Pct > 50) m.top10Pct = sc.top10Pct;
+    if (sc.lpLocked === false) m.lpLocked = false;
+    if (sc.holders != null) m.holders = sc.holders;
     if (state.data && state.data.metrics) Object.keys(state.data.metrics).forEach(function (k) {
       if (state.data.metrics[k] !== undefined) m[k] = state.data.metrics[k];
     });
@@ -122,7 +130,7 @@
       metrics: m,
       overrides: state.overrides,
       preCollapse: state.preCollapse,
-      launchCtx: { renounced: state.scraped.renounced, graduated: graduated, lpLocked: m.lpLocked }
+      launchCtx: { graduated: graduated, lpLocked: m.lpLocked }
     };
   }
 
@@ -130,7 +138,9 @@
     var ctx = state.ctx;
     if (!ctx || !ctx.address) { state.data = null; render(); return; }
     state.loading = true; state.error = null; render();
+    var addr = ctx.address;
     safeSend({ type: 'mct:fetch', kind: ctx.kind, chain: A.dexscreenerChain(ctx.chain), address: ctx.address }, function (res, err) {
+      if (!state.ctx || state.ctx.address !== addr) return; // navigated away: drop stale response
       state.loading = false;
       if (err) { state.error = 'Market data unavailable: ' + err; state.data = null; }
       else if (!res || !res.ok) { state.error = 'Market data unavailable: ' + ((res && res.error) || 'no response') + '. Signals from the page and manual input still apply.'; state.data = null; }
@@ -139,6 +149,7 @@
     });
   }
 
+  var MAX_SCRAPE_CHARS = 50000;
   function sanitizeScraped(sc) {
     var o = {};
     ['curveFillPct', 'devPct', 'top10Pct'].forEach(function (k) { if (typeof sc[k] === 'number' && sc[k] >= 0 && sc[k] <= 100) o[k] = sc[k]; });
@@ -149,7 +160,10 @@
   }
 
   function rescrape() {
-    try { state.scraped = sanitizeScraped(A.scrapeText(document.body ? document.body.innerText.slice(0, 200000) : '')); } catch (e) { state.scraped = {}; }
+    try {
+      var txt = document.body ? document.body.innerText : '';
+      state.scraped = sanitizeScraped(A.scrapeText(txt.length > MAX_SCRAPE_CHARS ? txt.slice(0, MAX_SCRAPE_CHARS) : txt));
+    } catch (e) { state.scraped = {}; }
     try { state.pageName = A.pageName(document.title, document.querySelector('h1') ? document.querySelector('h1').textContent : ''); } catch (e) { state.pageName = null; }
   }
 
@@ -161,11 +175,10 @@
     host = document.createElement('div');
     host.id = 'mct-host';
     host.setAttribute('style', 'all:initial; position:fixed; z-index:2147483646; top:0; right:0;');
-    shadow = host.attachShadow({ mode: 'open' });
-    var link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = chrome.runtime.getURL('src/content/panel.css');
-    shadow.appendChild(link);
+    shadow = host.attachShadow({ mode: 'closed' });
+    var style = document.createElement('style');
+    style.textContent = window.MCT.panelCss || '';
+    shadow.appendChild(style);
     rootEl = document.createElement('div');
     rootEl.id = 'mct-root';
     shadow.appendChild(rootEl);
@@ -181,7 +194,7 @@
   function render() {
     if (!rootEl) return;
     rootEl.innerHTML = '';
-    if (!state.settings.enabled) { host.style.display = 'none'; return; }
+    if (!state.settings.enabled) { host.style.display = 'none'; setBadge(null); return; }
     host.style.display = '';
     host.style.left = state.settings.side === 'left' ? '0' : '';
     host.style.right = state.settings.side === 'left' ? '' : '0';
@@ -264,9 +277,10 @@
       ['Vol/Mcap 1h', m.volMcap1h != null ? fmtPct(m.volMcap1h * 100) : '—'],
       ['Δ1h', d && d.priceChange && d.priceChange.h1 != null ? fmtPct(Number(d.priceChange.h1), 1) : '—']
     ];
-    if (m.holders != null) items.push(['Holders', String(m.holders)]);
-    if (m.devPct != null) items.push(['Dev', fmtPct(m.devPct, 1)]);
-    if (m.top10Pct != null) items.push(['Top10', fmtPct(m.top10Pct, 1)]);
+    var sc = state.scraped;
+    if (sc.holders != null) items.push(['Holders (page)', String(sc.holders)]);
+    if (sc.devPct != null) items.push(['Dev (page)', fmtPct(sc.devPct, 1)]);
+    if (sc.top10Pct != null) items.push(['Top10 (page)', fmtPct(sc.top10Pct, 1)]);
     var liqRatio = m.liquidityUsd != null && m.marketCap ? m.liquidityUsd / m.marketCap : null;
     if (liqRatio != null) items.push(['Liq/Mcap', fmtPct(liqRatio * 100, 1)]);
     var grid = h('div', { class: 'metrics' }, items.map(function (it) {
@@ -289,28 +303,37 @@
       return h('div', { class: cls, title: 'Click to cycle: auto → flagged → clear', onclick: function () { cycleOverride(row.id, auto); } }, [
         h('span', { class: 'sig-state', text: row.state === 'fired' ? '●' : row.state === 'clear' ? '○' : '?' }),
         h('span', { class: 'sig-label', text: row.label }),
-        h('span', { class: 'sig-src', text: src === 'manual' ? 'manual' : src === 'auto' ? autoValueText(row.id, a) : 'unknown' }),
+        h('span', { class: 'sig-src', text: src === 'manual' ? 'manual' : src === 'auto' ? autoValueText(row.id, a) : unknownHint(row.id) }),
         h('span', { class: 'sig-pts', text: '+' + row.points })
       ]);
     });
     return h('div', { class: 'section' }, [
       sectionTitle('On-chain signals', '7 signals · 10 pts'),
       h('div', { class: 'sigs' }, rows),
-      h('div', { class: 'muted small', text: 'Auto-filled where public data allows. Values marked "page:" are read from this site\'s own text and can be spoofed by the site — verify on-chain. Click a row to set it manually.' })
+      h('div', { class: 'muted small', text: 'Auto-filled where public data allows. Values marked "page:" are read from this site\'s own text and can be spoofed, so they can only raise the score, never clear a signal — verify on-chain and click a row to set it manually.' })
     ]);
   }
 
   function autoValueText(id, a) {
     var m = metrics();
     switch (id) {
-      case 'devHold': return m.devPct != null ? 'page: ' + fmtPct(m.devPct, 1) : 'auto';
-      case 'top10': return m.top10Pct != null ? 'page: ' + fmtPct(m.top10Pct, 1) : 'auto';
-      case 'lpUnlocked': return m.lpLocked === true ? 'page: locked/burned' : m.lpLocked === false ? 'page: unlocked' : 'auto';
+      case 'devHold': return state.scraped.devPct != null ? 'page: ' + fmtPct(state.scraped.devPct, 1) : 'auto';
+      case 'top10': return state.scraped.top10Pct != null ? 'page: ' + fmtPct(state.scraped.top10Pct, 1) : 'auto';
+      case 'lpUnlocked': return state.scraped.lpLocked === true ? 'page: locked (unverified)' : state.scraped.lpLocked === false ? 'page: unlocked' : 'auto';
       case 'volMcap': return m.volMcap1h != null ? fmtPct(m.volMcap1h * 100) : 'auto';
       case 'age': return fmtAge(m.ageHours);
       case 'devTrade': return m.devLastTradeHours != null ? fmtAge(m.devLastTradeHours) + ' ago' : 'auto';
       default: return 'auto';
     }
+  }
+
+  // Page text that would have cleared a signal is shown as a hint only.
+  function unknownHint(id) {
+    var sc = state.scraped;
+    if (id === 'devHold' && sc.devPct != null) return 'page: ' + fmtPct(sc.devPct, 1) + ' (unverified)';
+    if (id === 'top10' && sc.top10Pct != null) return 'page: ' + fmtPct(sc.top10Pct, 1) + ' (unverified)';
+    if (id === 'lpUnlocked' && sc.lpLocked === true) return 'page: locked (unverified)';
+    return 'unknown';
   }
 
   function cycleOverride(id, auto) {
@@ -437,32 +460,25 @@
     else render();
   }
 
+  // Content scripts live in an isolated world, so patching history.pushState would not see the
+  // page's own calls. Poll the URL instead; it is cheap.
   function hookHistory() {
-    ['pushState', 'replaceState'].forEach(function (fn) {
-      var orig = history[fn];
-      history[fn] = function () { var r = orig.apply(this, arguments); setTimeout(function () { onNavigate(); }, 50); return r; };
-    });
     window.addEventListener('popstate', function () { setTimeout(function () { onNavigate(); }, 50); });
-    setInterval(function () { onNavigate(); }, 1500);
+    setInterval(function () { if (!document.hidden) onNavigate(); }, 1500);
     // Re-scrape page text periodically — curve %, holders etc. load async.
     setInterval(function () {
-      if (!state.settings.enabled || state.settings.collapsed) return;
+      if (document.hidden || !state.settings.enabled || state.settings.collapsed) return;
       var before = JSON.stringify(state.scraped);
       rescrape();
       if (JSON.stringify(state.scraped) !== before) render();
     }, 5000);
-    setInterval(function () { if (state.settings.enabled && !state.settings.collapsed && state.ctx && state.ctx.address) fetchData(); }, 45000);
+    setInterval(function () { if (!document.hidden && state.settings.enabled && !state.settings.collapsed && state.ctx && state.ctx.address) fetchData(); }, 45000);
   }
 
   chrome.storage.onChanged.addListener(function (changes, area) {
     if (area !== 'local' || !changes.settings) return;
     state.settings = Object.assign(state.settings, changes.settings.newValue || {});
     render();
-  });
-
-  chrome.runtime.onMessage.addListener(function (msg) {
-    if (msg && msg.type === 'mct:toggle') { state.settings.enabled = !state.settings.enabled; saveSettings(); render(); }
-    if (msg && msg.type === 'mct:refresh') { rescrape(); fetchData(); }
   });
 
   mount();

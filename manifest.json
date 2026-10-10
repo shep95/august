@@ -64,48 +64,10 @@
         "src/shared/taxonomy.js",
         "src/shared/engine.js",
         "src/content/adapters.js",
+        "src/content/panel-css.js",
         "src/content/panel.js"
       ],
       "run_at": "document_idle"
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "src/content/panel.css"
-      ],
-      "matches": [
-        "https://pump.fun/*",
-        "https://*.pump.fun/*",
-        "https://dexscreener.com/*",
-        "https://www.dextools.io/*",
-        "https://gmgn.ai/*",
-        "https://photon-sol.tinyastro.io/*",
-        "https://*.bullx.io/*",
-        "https://bullx.io/*",
-        "https://axiom.trade/*",
-        "https://*.axiom.trade/*",
-        "https://birdeye.so/*",
-        "https://www.birdeye.so/*",
-        "https://four.meme/*",
-        "https://www.four.meme/*",
-        "https://moonshot.cc/*",
-        "https://dexlab.space/*",
-        "https://solscan.io/*",
-        "https://basescan.org/*",
-        "https://bscscan.com/*",
-        "https://jup.ag/*",
-        "https://raydium.io/*",
-        "https://app.meteora.ag/*",
-        "https://app.uniswap.org/*",
-        "https://rugcheck.xyz/*",
-        "https://www.geckoterminal.com/*",
-        "https://neo.bullx.io/*",
-        "https://trojan.app/*",
-        "https://ston.fi/*",
-        "https://app.ston.fi/*",
-        "https://dedust.io/*"
-      ]
     }
   ]
 }

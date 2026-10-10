@@ -8,8 +8,14 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
+  function str(v, max) { return typeof v === 'string' ? v.slice(0, max || 200) : undefined; }
+  function fin(v) { var n = Number(v); return v != null && v !== '' && isFinite(n) ? n : null; }
+  function objArray(v) { return Array.isArray(v) ? v.filter(function (o) { return o && typeof o === 'object'; }).slice(0, 20) : []; }
+
   function bestPair(pairs) {
-    if (!Array.isArray(pairs) || !pairs.length) return null;
+    if (!Array.isArray(pairs)) return null;
+    pairs = pairs.filter(function (p) { return p && typeof p === 'object'; });
+    if (!pairs.length) return null;
     return pairs.slice().sort(function (a, b) {
       var la = (a.liquidity && a.liquidity.usd) || 0, lb = (b.liquidity && b.liquidity.usd) || 0;
       return lb - la;
@@ -19,34 +25,39 @@
   function normalize(pair, now) {
     if (!pair) return null;
     now = now || Date.now();
-    var created = pair.pairCreatedAt ? Number(pair.pairCreatedAt) : null;
-    var mcap = pair.marketCap != null ? pair.marketCap : pair.fdv != null ? pair.fdv : null;
-    var vol1h = pair.volume && pair.volume.h1 != null ? Number(pair.volume.h1) : null;
-    var vol24 = pair.volume && pair.volume.h24 != null ? Number(pair.volume.h24) : null;
-    var liq = pair.liquidity && pair.liquidity.usd != null ? Number(pair.liquidity.usd) : null;
-    var txns1h = pair.txns && pair.txns.h1 ? (pair.txns.h1.buys || 0) + (pair.txns.h1.sells || 0) : null;
+    var created = fin(pair.pairCreatedAt);
+    var mcap = fin(pair.marketCap); if (mcap == null) mcap = fin(pair.fdv);
+    var vol = pair.volume && typeof pair.volume === 'object' ? pair.volume : {};
+    var vol1h = fin(vol.h1), vol24 = fin(vol.h24);
+    var liq = pair.liquidity && typeof pair.liquidity === 'object' ? fin(pair.liquidity.usd) : null;
+    var tx = pair.txns && pair.txns.h1 && typeof pair.txns.h1 === 'object' ? pair.txns.h1 : null;
+    var txns1h = tx ? (fin(tx.buys) || 0) + (fin(tx.sells) || 0) : null;
+    var base = pair.baseToken && typeof pair.baseToken === 'object' ? pair.baseToken : {};
+    var pc = pair.priceChange && typeof pair.priceChange === 'object' ? pair.priceChange : {};
+    var info = pair.info && typeof pair.info === 'object' ? pair.info : {};
+    var ageHours = created != null && created > 0 && created <= now ? (now - created) / 36e5 : undefined;
     return {
       source: 'dexscreener',
       fetchedAt: now,
-      chainId: pair.chainId,
-      dexId: pair.dexId,
-      labels: pair.labels || [],
-      pairAddress: pair.pairAddress,
-      tokenAddress: pair.baseToken && pair.baseToken.address,
-      symbol: pair.baseToken && pair.baseToken.symbol,
-      name: pair.baseToken && pair.baseToken.name,
-      priceUsd: pair.priceUsd != null ? Number(pair.priceUsd) : null,
-      priceChange: pair.priceChange || {},
-      url: pair.url,
-      socials: (pair.info && pair.info.socials) || [],
-      websites: (pair.info && pair.info.websites) || [],
+      chainId: str(pair.chainId, 32),
+      dexId: str(pair.dexId, 64),
+      labels: Array.isArray(pair.labels) ? pair.labels.filter(function (x) { return typeof x === 'string'; }).slice(0, 10) : [],
+      pairAddress: str(pair.pairAddress, 128),
+      tokenAddress: str(base.address, 128),
+      symbol: str(base.symbol, 32),
+      name: str(base.name, 120),
+      priceUsd: fin(pair.priceUsd),
+      priceChange: { m5: fin(pc.m5), h1: fin(pc.h1), h6: fin(pc.h6), h24: fin(pc.h24) },
+      url: str(pair.url, 512),
+      socials: objArray(info.socials),
+      websites: objArray(info.websites).map(function (w) { return { label: str(w.label, 80), url: str(w.url, 512) }; }),
       metrics: {
-        ageHours: created ? (now - created) / 36e5 : undefined,
-        marketCap: mcap != null ? Number(mcap) : undefined,
-        liquidityUsd: liq != null ? liq : undefined,
-        volume1h: vol1h != null ? vol1h : undefined,
-        volume24h: vol24 != null ? vol24 : undefined,
-        volMcap1h: vol1h != null && mcap ? vol1h / Number(mcap) : undefined,
+        ageHours: ageHours,
+        marketCap: mcap != null && mcap >= 0 ? mcap : undefined,
+        liquidityUsd: liq != null && liq >= 0 ? liq : undefined,
+        volume1h: vol1h != null && vol1h >= 0 ? vol1h : undefined,
+        volume24h: vol24 != null && vol24 >= 0 ? vol24 : undefined,
+        volMcap1h: vol1h != null && mcap ? vol1h / mcap : undefined,
         txns1h: txns1h != null ? txns1h : undefined
       }
     };

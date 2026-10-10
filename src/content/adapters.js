@@ -8,9 +8,12 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var SOL_ADDR = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
-  var EVM_ADDR = /0x[a-fA-F0-9]{40}/g;
-  var TON_ADDR = /[EU]Q[A-Za-z0-9_-]{46}/g;
+  // Anchored so a 64-hex tx hash or an 88-char signature is never truncated into an "address".
+  var SOL_ADDR = /(?<![1-9A-HJ-NP-Za-km-z])[1-9A-HJ-NP-Za-km-z]{32,44}(?![1-9A-HJ-NP-Za-km-z])/g;
+  var EVM_ADDR = /(?<![a-zA-Z0-9])0x[a-fA-F0-9]{40}(?![a-zA-Z0-9])/g;
+  var TON_ADDR = /(?<![A-Za-z0-9_-])[EU]Q[A-Za-z0-9_-]{46}(?![A-Za-z0-9_-])/g;
+  // Paths that identify wallets or transactions, never tokens. Never looked up.
+  var NON_TOKEN_PATH = /\/(account|accounts|address|addresses|wallet|wallets|profile|profiles|user|users|portfolio|trader|traders|holder|holders|tx|txs|transaction|transactions|block|blocks|sig|signature)(\/|$)/i;
 
   function first(re, s) { re.lastIndex = 0; var m = re.exec(s || ''); return m ? m[0] : null; }
   function all(re, s) { re.lastIndex = 0; var out = [], m; while ((m = re.exec(s || ''))) out.push(m[0]); return out; }
@@ -58,7 +61,7 @@
     if (/lp\s*(?:burn(?:ed|t)?|locked)/i.test(t) || /liquidity\s*(?:burn(?:ed|t)?|locked)/i.test(t)) out.lpLocked = true;
     if (/lp\s*(?:unlocked|not\s*locked)/i.test(t) || /liquidity\s*(?:unlocked|not\s*locked)/i.test(t)) out.lpLocked = false;
     if (/mint(?:able)?(?:\s*authority)?\s*(?:disabled|revoked|renounced)/i.test(t) || /renounced/i.test(t)) out.renounced = true;
-    var hre = /holders?\s*[:\-]?\s*([\d,]+)(?![\w%])/ig, hm;
+    var hre = /holders?[\s:\-]{0,8}([\d,]+)(?![\w%])/ig, hm;
     while ((hm = hre.exec(t))) {
       if (/^[\d,.]*\s*%/.test(t.slice(hm.index + hm[0].length, hm.index + hm[0].length + 6))) continue;
       out.holders = num(hm[1]); break;
@@ -136,11 +139,11 @@
       ctx.chain = 'solana'; ctx.launchpad = host === 'moonshot.cc' ? 'moonshot' : null;
       var am = addressFromText(path, 'solana'); if (am) ctx.address = am.address;
     } else if (host === 'solscan.io') {
-      ctx.chain = 'solana';
-      if ((m = /\/token\/([1-9A-HJ-NP-Za-km-z]{32,44})/.exec(path))) ctx.address = m[1];
+      ctx.chain = 'solana'; ctx.strict = true;
+      if ((m = /^\/token\/([1-9A-HJ-NP-Za-km-z]{32,44})(?:[/?#]|$)/.exec(path))) ctx.address = m[1];
     } else if (host === 'basescan.org' || host === 'bscscan.com') {
-      ctx.chain = host === 'basescan.org' ? 'base' : 'bsc';
-      if ((m = /\/token\/(0x[a-fA-F0-9]{40})/.exec(path))) ctx.address = m[1];
+      ctx.chain = host === 'basescan.org' ? 'base' : 'bsc'; ctx.strict = true;
+      if ((m = /^\/token\/(0x[a-fA-F0-9]{40})(?:[/?#]|$)/.exec(path))) ctx.address = m[1];
     } else if (host === 'geckoterminal.com') {
       if (seg.length >= 3 && seg[1] === 'pools') { ctx.chain = chainFromSlug(seg[0]); ctx.address = seg[2]; ctx.kind = 'pair'; }
     } else if (host === 'rugcheck.xyz') {
@@ -171,8 +174,10 @@
       ctx.supported = false;
     }
 
-    // Generic fallback: any address in the URL.
-    if (!ctx.address) {
+    // Wallet / tx pages are never token lookups (would leak the user's own wallet to the API).
+    if (NON_TOKEN_PATH.test(path)) { ctx.address = null; ctx.strict = true; }
+    // Generic fallback: any address in the URL (not on explorers).
+    if (!ctx.address && !ctx.strict) {
       var g = addressFromText(path + ' ' + u.search, ctx.chain);
       if (g) { ctx.address = g.address; ctx.chain = ctx.chain || g.chain; }
     }
@@ -181,6 +186,7 @@
     }
     if (!isValidAddress(ctx.address)) ctx.address = null;
     if (!isValidChain(ctx.chain)) ctx.chain = null;
+    delete ctx.strict;
     return ctx;
   }
 
@@ -189,12 +195,12 @@
   }
 
   function chainFromDexscreener(id) {
-    return { solana: 'solana', ethereum: 'ethereum', bsc: 'bsc', base: 'base', ton: 'ton' }[id] || id;
+    return typeof id === 'string' && KNOWN_CHAINS.indexOf(id) >= 0 ? id : null;
   }
 
   function launchpadFromDex(dexId, labels) {
-    var d = String(dexId || '').toLowerCase();
-    var l = (labels || []).join(' ').toLowerCase();
+    var d = String(typeof dexId === 'string' ? dexId : '').toLowerCase();
+    var l = (Array.isArray(labels) ? labels : []).filter(function (x) { return typeof x === 'string'; }).join(' ').toLowerCase();
     if (d.indexOf('pumpfun') >= 0 || d.indexOf('pump') >= 0 || l.indexOf('pump') >= 0) return 'pumpfun';
     if (d.indexOf('fourmeme') >= 0 || d.indexOf('four') >= 0) return 'fourmeme';
     if (d.indexOf('meteora') >= 0) return 'meteora';

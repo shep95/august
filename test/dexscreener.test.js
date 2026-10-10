@@ -39,3 +39,22 @@ test('urls', () => {
   assert.equal(DS.tokenUrl('abc'), 'https://api.dexscreener.com/latest/dex/tokens/abc');
   assert.equal(DS.pairUrl('solana', 'p/1'), 'https://api.dexscreener.com/latest/dex/pairs/solana/p%2F1');
 });
+
+test('normalize survives hostile / malformed responses', () => {
+  const n = DS.normalize({ labels: 'x', info: { websites: [null, 5, { label: 1, url: 'u' }], socials: 'nope' }, baseToken: 'str', volume: 'v', liquidity: null, txns: { h1: 'x' }, priceChange: [], marketCap: 'abc', pairCreatedAt: Date.now() + 1e9, chainId: 42, url: ['x'] }, NOW);
+  assert.deepEqual(n.labels, []);
+  assert.deepEqual(n.websites, [{ label: undefined, url: 'u' }]);
+  assert.deepEqual(n.socials, []);
+  assert.equal(n.symbol, undefined);
+  assert.equal(n.chainId, undefined);
+  assert.equal(n.url, undefined);
+  assert.equal(n.metrics.marketCap, undefined);
+  assert.equal(n.metrics.ageHours, undefined, 'future creation time rejected');
+  assert.equal(n.metrics.txns1h, undefined);
+  assert.equal(DS.normalize({ txns: { h1: { buys: '3', sells: 'x' } } }, NOW).metrics.txns1h, 3);
+  assert.equal(DS.bestPair([null, 'x', { liquidity: { usd: 1 } }]).liquidity.usd, 1);
+  const long = DS.normalize({ baseToken: { name: 'n'.repeat(5000), symbol: 's'.repeat(500) } }, NOW);
+  assert.equal(long.name.length, 120);
+  assert.equal(long.symbol.length, 32);
+  assert.equal(DS.normalize({ marketCap: -5, volume: { h1: -1 } }, NOW).metrics.marketCap, undefined);
+});

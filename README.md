@@ -107,7 +107,17 @@ popup and node tests. Adding a narrative keyword, a chain or a signal is a data 
   malformed messages and bounds its cache.
 - The only outbound link is rendered when the API URL is `https://dexscreener.com/...`.
 - Values scraped from the host page are labelled `page:` in the panel because a site can
-  print anything. Treat them as hints and verify on-chain.
+  print anything. They can only fire a signal (raise the score), never clear one; a page
+  value that would clear a signal is shown as an unverified hint instead.
+- The panel renders in a closed shadow root and ignores synthetic events, so the host page
+  cannot read, click or rewrite it.
+- Wallet, profile and transaction pages on explorers are never looked up, so your own
+  addresses are not sent to the API. Address patterns are anchored so hashes are never
+  truncated into lookups.
+- API responses are type-checked and length-capped; fetches time out after 10 s, bodies
+  are capped at 2 MB, and concurrent requests for the same token are deduplicated.
+- The page-text scraper is bounded to 50 KB and its patterns were checked for
+  catastrophic backtracking.
 - Per-token overrides are capped at 200 entries in `chrome.storage.local`.
 
 ## Limitations

@@ -6,12 +6,29 @@
 importScripts('../shared/dexscreener.js', '../content/adapters.js');
 var DS = self.MCT.dexscreener, AD = self.MCT.adapters;
 var CACHE = {};
+var PENDING = {};
 var TTL_MS = 20 * 1000;
+var FETCH_TIMEOUT_MS = 10 * 1000;
+var MAX_BODY_BYTES = 2 * 1024 * 1024;
 
 async function getJson(url) {
-  var res = await fetch(url, { headers: { accept: 'application/json' } });
+  var res = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   if (!res.ok) throw new Error('DexScreener HTTP ' + res.status);
-  return res.json();
+  var len = Number(res.headers.get('content-length'));
+  if (isFinite(len) && len > MAX_BODY_BYTES) throw new Error('response too large');
+  var reader = res.body.getReader(), chunks = [], total = 0;
+  for (;;) {
+    var r = await reader.read();
+    if (r.done) break;
+    total += r.value.byteLength;
+    if (total > MAX_BODY_BYTES) { reader.cancel(); throw new Error('response too large'); }
+    chunks.push(r.value);
+  }
+  var buf = new Uint8Array(total), off = 0;
+  chunks.forEach(function (c) { buf.set(c, off); off += c.byteLength; });
+  var json = JSON.parse(new TextDecoder().decode(buf));
+  if (!json || typeof json !== 'object') throw new Error('bad response');
+  return json;
 }
 
 async function fetchDex(kind, chain, address) {
@@ -20,18 +37,22 @@ async function fetchDex(kind, chain, address) {
   if (chain != null && !AD.isValidChain(chain)) throw new Error('invalid chain');
   var keys = Object.keys(CACHE);
   if (keys.length > 200) keys.slice(0, 100).forEach(function (k) { delete CACHE[k]; });
-  var key = kind + ':' + chain + ':' + address;
+  var key = kind + ':' + (chain || '') + ':' + address;
   var hit = CACHE[key];
   if (hit && Date.now() - hit.at < TTL_MS) return hit.data;
-  var json = await getJson(kind === 'pair' && chain ? DS.pairUrl(chain, address) : DS.tokenUrl(address));
-  var pair = DS.bestPair(json.pairs || (json.pair ? [json.pair] : []));
-  // A pair lookup that misses may still be a token address on this chain.
-  if (!pair && kind === 'pair') {
-    try { var j2 = await getJson(DS.tokenUrl(address)); pair = DS.bestPair(j2.pairs || []); } catch (e) { /* keep null */ }
-  }
-  var data = DS.normalize(pair);
-  CACHE[key] = { at: Date.now(), data: data };
-  return data;
+  if (PENDING[key]) return PENDING[key];
+  PENDING[key] = (async function () {
+    var json = await getJson(kind === 'pair' && chain ? DS.pairUrl(chain, address) : DS.tokenUrl(address));
+    var pair = DS.bestPair(json.pairs || (json.pair ? [json.pair] : []));
+    // A pair lookup that misses may still be a token address on this chain.
+    if (!pair && kind === 'pair') {
+      try { var j2 = await getJson(DS.tokenUrl(address)); pair = DS.bestPair(j2.pairs || []); } catch (e) { /* keep null */ }
+    }
+    var data = DS.normalize(pair);
+    CACHE[key] = { at: Date.now(), data: data };
+    return data;
+  })();
+  try { return await PENDING[key]; } finally { delete PENDING[key]; }
 }
 
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
@@ -46,8 +67,9 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     var tabId = sender && sender.tab && sender.tab.id;
     if (tabId == null) return;
     var text = String(msg.text || '').slice(0, 4);
-    chrome.action.setBadgeText({ tabId: tabId, text: text });
-    if (typeof msg.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(msg.color)) chrome.action.setBadgeBackgroundColor({ tabId: tabId, color: msg.color });
+    var swallow = function () {};
+    Promise.resolve(chrome.action.setBadgeText({ tabId: tabId, text: text })).catch(swallow);
+    if (typeof msg.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(msg.color)) Promise.resolve(chrome.action.setBadgeBackgroundColor({ tabId: tabId, color: msg.color })).catch(swallow);
   }
 });
 
