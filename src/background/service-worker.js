@@ -3,8 +3,8 @@
  * content panel (content scripts cannot call cross-origin APIs on every
  * site), keeps a short cache and drives the toolbar badge.
  */
-importScripts('../shared/dexscreener.js');
-var DS = self.MCT.dexscreener;
+importScripts('../shared/dexscreener.js', '../content/adapters.js');
+var DS = self.MCT.dexscreener, AD = self.MCT.adapters;
 var CACHE = {};
 var TTL_MS = 20 * 1000;
 
@@ -15,6 +15,11 @@ async function getJson(url) {
 }
 
 async function fetchDex(kind, chain, address) {
+  if (!AD.isValidAddress(address)) throw new Error('invalid address');
+  if (kind !== 'token' && kind !== 'pair') throw new Error('invalid kind');
+  if (chain != null && !AD.isValidChain(chain)) throw new Error('invalid chain');
+  var keys = Object.keys(CACHE);
+  if (keys.length > 200) keys.slice(0, 100).forEach(function (k) { delete CACHE[k]; });
   var key = kind + ':' + chain + ':' + address;
   var hit = CACHE[key];
   if (hit && Date.now() - hit.at < TTL_MS) return hit.data;
@@ -40,8 +45,9 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   if (msg.type === 'mct:badge') {
     var tabId = sender && sender.tab && sender.tab.id;
     if (tabId == null) return;
-    chrome.action.setBadgeText({ tabId: tabId, text: msg.text || '' });
-    if (msg.color) chrome.action.setBadgeBackgroundColor({ tabId: tabId, color: msg.color });
+    var text = String(msg.text || '').slice(0, 4);
+    chrome.action.setBadgeText({ tabId: tabId, text: text });
+    if (typeof msg.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(msg.color)) chrome.action.setBadgeBackgroundColor({ tabId: tabId, color: msg.color });
   }
 });
 

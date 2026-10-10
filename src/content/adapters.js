@@ -25,6 +25,14 @@
 
   function chainFromSlug(s) { return CHAIN_SLUGS[String(s || '').toLowerCase()] || null; }
 
+  var KNOWN_CHAINS = ['solana', 'ethereum', 'bsc', 'base', 'ton'];
+  /** Strict shape check for anything used as a storage key or API path. */
+  function isValidAddress(a) {
+    if (typeof a !== 'string' || a.length > 64) return false;
+    return /^0x[a-fA-F0-9]{40}$/.test(a) || /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a) || /^[EU]Q[A-Za-z0-9_-]{46}$/.test(a);
+  }
+  function isValidChain(c) { return c == null || KNOWN_CHAINS.indexOf(c) >= 0; }
+
   function addressFromText(text, preferredChain) {
     var evm = first(EVM_ADDR, text);
     var ton = first(TON_ADDR, text);
@@ -171,6 +179,8 @@
     if (ctx.address && !ctx.chain) {
       ctx.chain = /^0x/.test(ctx.address) ? null : /^[EU]Q/.test(ctx.address) ? 'ton' : 'solana';
     }
+    if (!isValidAddress(ctx.address)) ctx.address = null;
+    if (!isValidChain(ctx.chain)) ctx.chain = null;
     return ctx;
   }
 
@@ -195,6 +205,8 @@
 
   return {
     parseUrl: parseUrl,
+    isValidAddress: isValidAddress,
+    isValidChain: isValidChain,
     pageName: pageName,
     scrapeText: scrapeText,
     addressFromText: addressFromText,

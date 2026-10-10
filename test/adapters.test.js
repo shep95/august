@@ -107,3 +107,34 @@ test('pageName', () => {
   assert.equal(A.pageName('', ''), null);
   assert.deepEqual(A.pageName('Popcat - Photon', ''), { name: 'Popcat' });
 });
+
+test('isValidAddress / isValidChain', () => {
+  assert.equal(A.isValidAddress(SOL), true);
+  assert.equal(A.isValidAddress(EVM), true);
+  assert.equal(A.isValidAddress('EQ' + 'A'.repeat(46)), true);
+  assert.equal(A.isValidAddress('../../etc/passwd'), false);
+  assert.equal(A.isValidAddress('<script>alert(1)</script>'), false);
+  assert.equal(A.isValidAddress('x'.repeat(100)), false);
+  assert.equal(A.isValidAddress(null), false);
+  assert.equal(A.isValidChain('solana'), true);
+  assert.equal(A.isValidChain(null), true);
+  assert.equal(A.isValidChain('../pairs'), false);
+});
+
+test('parseUrl rejects hostile query addresses', () => {
+  let c = A.parseUrl('https://neo.bullx.io/terminal?chainId=1399811149&address=javascript:alert(1)');
+  assert.equal(c.address, null);
+  c = A.parseUrl('https://neo.bullx.io/terminal?chainId=1399811149&address=' + encodeURIComponent('../../x'));
+  assert.equal(c.address, null);
+  c = A.parseUrl('https://birdeye.so/token/' + 'A'.repeat(300) + '?chain=solana');
+  assert.equal(c.address, null);
+  c = A.parseUrl('https://birdeye.so/token/' + SOL + '?chain=<img>');
+  assert.equal(c.chain, 'solana', 'bad chain slug falls back');
+});
+
+test('scrapeText is bounded on hostile input', () => {
+  const big = 'holders '.repeat(50000) + '%'.repeat(1000) + 'dev ' + '9'.repeat(5000) + '%';
+  const t0 = Date.now();
+  A.scrapeText(big);
+  assert.ok(Date.now() - t0 < 2000, 'no catastrophic backtracking');
+});

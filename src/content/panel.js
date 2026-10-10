@@ -32,7 +32,6 @@
     if (attrs) Object.keys(attrs).forEach(function (k) {
       if (k === 'class') el.className = attrs[k];
       else if (k === 'text') el.textContent = attrs[k];
-      else if (k === 'html') el.innerHTML = attrs[k];
       else if (k.indexOf('on') === 0) el.addEventListener(k.slice(2), attrs[k]);
       else if (k === 'style') el.setAttribute('style', attrs[k]);
       else el.setAttribute(k, attrs[k]);
@@ -54,7 +53,27 @@
     return (hours / 24).toFixed(1) + 'd';
   }
   function fmtPct(n, digits) { return n == null || !isFinite(n) ? '—' : n.toFixed(digits == null ? 0 : digits) + '%'; }
-  function storageKey() { return state.ctx && state.ctx.address ? 'mct:tok:' + state.ctx.address : null; }
+  function storageKey() { return state.ctx && A.isValidAddress(state.ctx.address) ? 'mct:tok:' + state.ctx.address : null; }
+  function safeSend(msg, cb) {
+    try {
+      chrome.runtime.sendMessage(msg, function (res) {
+        if (chrome.runtime.lastError) { cb && cb(null, chrome.runtime.lastError.message); return; }
+        cb && cb(res, null);
+      });
+    } catch (e) { cb && cb(null, 'extension reloaded — refresh the page'); }
+  }
+  function safeExternalUrl(u) {
+    try { var p = new URL(String(u)); return p.protocol === 'https:' && (p.hostname === 'dexscreener.com' || p.hostname === 'www.dexscreener.com') ? p.href : null; } catch (e) { return null; }
+  }
+  var MAX_STORED_TOKENS = 200;
+  function pruneStorage() {
+    chrome.storage.local.get(null, function (all) {
+      var keys = Object.keys(all).filter(function (k) { return k.indexOf('mct:tok:') === 0; });
+      if (keys.length <= MAX_STORED_TOKENS) return;
+      keys.sort(function (a, b) { return ((all[a] && all[a].at) || 0) - ((all[b] && all[b].at) || 0); });
+      chrome.storage.local.remove(keys.slice(0, keys.length - MAX_STORED_TOKENS));
+    });
+  }
 
   function loadStored(cb) {
     var key = storageKey();
@@ -70,7 +89,7 @@
   function saveToken() {
     var key = storageKey(); if (!key) return;
     var obj = {}; obj[key] = { overrides: state.overrides, preCollapse: state.preCollapse, at: Date.now() };
-    chrome.storage.local.set(obj);
+    chrome.storage.local.set(obj, pruneStorage);
   }
   function saveSettings() { chrome.storage.local.set({ settings: state.settings }); }
 
@@ -111,17 +130,26 @@
     var ctx = state.ctx;
     if (!ctx || !ctx.address) { state.data = null; render(); return; }
     state.loading = true; state.error = null; render();
-    chrome.runtime.sendMessage({ type: 'mct:fetch', kind: ctx.kind, chain: A.dexscreenerChain(ctx.chain), address: ctx.address }, function (res) {
+    safeSend({ type: 'mct:fetch', kind: ctx.kind, chain: A.dexscreenerChain(ctx.chain), address: ctx.address }, function (res, err) {
       state.loading = false;
-      if (chrome.runtime.lastError) { state.error = chrome.runtime.lastError.message; state.data = null; }
+      if (err) { state.error = 'Market data unavailable: ' + err; state.data = null; }
       else if (!res || !res.ok) { state.error = 'Market data unavailable: ' + ((res && res.error) || 'no response') + '. Signals from the page and manual input still apply.'; state.data = null; }
       else { state.data = res.data; if (!res.data) state.error = 'No DexScreener pair found (pre-graduation tokens may not be indexed yet).'; }
       render();
     });
   }
 
+  function sanitizeScraped(sc) {
+    var o = {};
+    ['curveFillPct', 'devPct', 'top10Pct'].forEach(function (k) { if (typeof sc[k] === 'number' && sc[k] >= 0 && sc[k] <= 100) o[k] = sc[k]; });
+    if (typeof sc.holders === 'number' && sc.holders >= 0 && sc.holders < 1e8) o.holders = sc.holders;
+    if (typeof sc.lpLocked === 'boolean') o.lpLocked = sc.lpLocked;
+    if (typeof sc.renounced === 'boolean') o.renounced = sc.renounced;
+    return o;
+  }
+
   function rescrape() {
-    try { state.scraped = A.scrapeText(document.body ? document.body.innerText.slice(0, 200000) : ''); } catch (e) { state.scraped = {}; }
+    try { state.scraped = sanitizeScraped(A.scrapeText(document.body ? document.body.innerText.slice(0, 200000) : '')); } catch (e) { state.scraped = {}; }
     try { state.pageName = A.pageName(document.title, document.querySelector('h1') ? document.querySelector('h1').textContent : ''); } catch (e) { state.pageName = null; }
   }
 
@@ -147,7 +175,7 @@
   function setBadge(a) {
     var text = '', color = '#64748b';
     if (a && state.ctx && state.ctx.address) { text = String(a.scoring.score); color = a.scoring.band.color; }
-    try { chrome.runtime.sendMessage({ type: 'mct:badge', text: text, color: color }); } catch (e) {}
+    safeSend({ type: 'mct:badge', text: text, color: color });
   }
 
   function render() {
@@ -268,16 +296,16 @@
     return h('div', { class: 'section' }, [
       sectionTitle('On-chain signals', '7 signals · 10 pts'),
       h('div', { class: 'sigs' }, rows),
-      h('div', { class: 'muted small', text: 'Auto-filled where public data allows. Dev %, top-10 %, LP lock and social velocity usually need a manual check on the site — click a row to set it.' })
+      h('div', { class: 'muted small', text: 'Auto-filled where public data allows. Values marked "page:" are read from this site\'s own text and can be spoofed by the site — verify on-chain. Click a row to set it manually.' })
     ]);
   }
 
   function autoValueText(id, a) {
     var m = metrics();
     switch (id) {
-      case 'devHold': return m.devPct != null ? fmtPct(m.devPct, 1) : 'auto';
-      case 'top10': return m.top10Pct != null ? fmtPct(m.top10Pct, 1) : 'auto';
-      case 'lpUnlocked': return m.lpLocked === true ? 'locked/burned' : m.lpLocked === false ? 'unlocked' : 'auto';
+      case 'devHold': return m.devPct != null ? 'page: ' + fmtPct(m.devPct, 1) : 'auto';
+      case 'top10': return m.top10Pct != null ? 'page: ' + fmtPct(m.top10Pct, 1) : 'auto';
+      case 'lpUnlocked': return m.lpLocked === true ? 'page: locked/burned' : m.lpLocked === false ? 'page: unlocked' : 'auto';
       case 'volMcap': return m.volMcap1h != null ? fmtPct(m.volMcap1h * 100) : 'auto';
       case 'age': return fmtAge(m.ageHours);
       case 'devTrade': return m.devLastTradeHours != null ? fmtAge(m.devLastTradeHours) + ' ago' : 'auto';
@@ -375,7 +403,7 @@
     return h('div', { class: 'footer' }, [
       h('span', { class: 'muted small', text: d ? 'DexScreener · ' + Math.round((Date.now() - d.fetchedAt) / 1000) + 's ago' : 'No market data' }),
       h('span', { class: 'spacer' }),
-      d && d.url ? h('a', { class: 'small', href: d.url, target: '_blank', rel: 'noopener', text: 'open on DexScreener' }) : null,
+      d && safeExternalUrl(d.url) ? h('a', { class: 'small', href: safeExternalUrl(d.url), target: '_blank', rel: 'noopener noreferrer', text: 'open on DexScreener' }) : null,
       h('span', { class: 'muted small', text: ' · research, not advice' })
     ]);
   }
