@@ -55,8 +55,46 @@ async function fetchDex(kind, chain, address) {
   try { return await PENDING[key]; } finally { delete PENDING[key]; }
 }
 
+// Batch lookup for list pages: DexScreener accepts up to 30 comma-separated addresses.
+async function fetchMany(kind, chain, addresses) {
+  if (!Array.isArray(addresses)) throw new Error('invalid addresses');
+  if (kind !== 'token' && kind !== 'pair') throw new Error('invalid kind');
+  if (chain != null && !AD.isValidChain(chain)) throw new Error('invalid chain');
+  var want = [], out = {};
+  addresses.slice(0, 30).forEach(function (a) {
+    if (!AD.isValidAddress(a)) return;
+    var hit = CACHE[kind + ':' + (chain || '') + ':' + a];
+    if (hit && Date.now() - hit.at < TTL_MS * 3) out[a] = hit.data; else want.push(a);
+  });
+  if (want.length) {
+    var url = kind === 'pair' && chain ? DS.pairUrl(chain, want.join(',')) : DS.tokenUrl(want.join(','));
+    var json = await getJson(url);
+    var pairs = Array.isArray(json.pairs) ? json.pairs.filter(function (p) { return p && typeof p === 'object'; }) : [];
+    var byAddr = {};
+    pairs.forEach(function (p) {
+      var key = kind === 'pair' ? p.pairAddress : (p.baseToken && p.baseToken.address);
+      if (typeof key !== 'string') return;
+      var k = want.find(function (w) { return w.toLowerCase() === key.toLowerCase(); });
+      if (!k) return;
+      (byAddr[k] = byAddr[k] || []).push(p);
+    });
+    want.forEach(function (a) {
+      var data = DS.normalize(DS.bestPair(byAddr[a] || []));
+      CACHE[kind + ':' + (chain || '') + ':' + a] = { at: Date.now(), data: data };
+      out[a] = data;
+    });
+  }
+  return out;
+}
+
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   if (!msg || !msg.type) return;
+  if (msg.type === 'mct:fetchMany') {
+    fetchMany(msg.kind, msg.chain, msg.addresses)
+      .then(function (data) { sendResponse({ ok: true, data: data }); })
+      .catch(function (err) { sendResponse({ ok: false, error: String(err && err.message || err) }); });
+    return true;
+  }
   if (msg.type === 'mct:fetch') {
     fetchDex(msg.kind, msg.chain, msg.address)
       .then(function (data) { sendResponse({ ok: true, data: data }); })

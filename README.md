@@ -10,6 +10,38 @@ Research reference only. Not financial advice.
 
 ## What it does
 
+**Automatic verdict.** Every coin page opens with a rounded verdict card: **SKIP**, **HALF SIZE ·
+CAUTION** or **BUY · FULL SIZE**, with the research reasons listed under it. Nothing to click:
+the 17 filter rules below are on by default and come straight from the research.
+
+**Automatic list screening.** On trending, board and list pages every coin link is looked up
+and badged with its verdict and score; coins that fail are hidden (or dimmed / badged only,
+your choice in the popup). The panel shows a running count of skip / half / buy / no-data.
+
+| Rule | Severity |
+| --- | --- |
+| Score band Skip or Do-not-engage (5+) | reject |
+| Score band Half-size (3–4) | caution |
+| Celebrity derivative narrative | reject |
+| Political narrative | reject |
+| No narrative anchor (absurdist) | caution |
+| pump.fun curve ≥95% | reject |
+| pump.fun curve 60–95% | caution |
+| LP unlocked / removable | reject |
+| Dev wallet >10% | reject |
+| Top-10 holders >50% | reject |
+| Liquidity <5% of mcap (LPI) | reject |
+| Vol/mcap >100% in 1h (wash) | caution |
+| Launch phase (<24h) | caution |
+| Under 1 hour old | reject, off by default |
+| 3+ pre-collapse signals | reject |
+| BSC / four.meme chain | caution |
+| Any launchpad red flag | reject |
+
+Rules that cannot be checked from public data (dev %, top-10 %, LP lock) are listed as
+"not checkable yet" on the card and never silently pass; set them in the On-chain signals
+section and the verdict updates.
+
 | Section | Source in the research | What the panel shows |
 | --- | --- | --- |
 | Score | Domain III applied — 7 signals, 10-point scale | Composite score, band (full / half / skip / do not engage), per-signal state. Signals auto-fill from public data where possible and can be overridden by clicking. |

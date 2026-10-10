@@ -63,6 +63,7 @@
       "js": [
         "src/shared/taxonomy.js",
         "src/shared/engine.js",
+        "src/shared/filters.js",
         "src/content/adapters.js",
         "src/content/panel-css.js",
         "src/content/panel.js"

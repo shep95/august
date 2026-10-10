@@ -1,6 +1,7 @@
 (function () {
   'use strict';
-  var T = window.MCT.taxonomy, E = window.MCT.engine;
+  var T = window.MCT.taxonomy, E = window.MCT.engine, F = window.MCT.filters;
+  var settings = { enabled: true, side: 'right', collapsed: false, listMode: 'hide', filters: {} };
   var content = document.getElementById('content');
   var quick = {};
 
@@ -25,7 +26,38 @@
     ]);
   }
 
+  function saveSettings() { chrome.storage.local.set({ settings: settings }); }
+
   var tabs = {
+    filters: function () {
+      var frag = document.createDocumentFragment();
+      var en = Object.assign(F.defaults(), settings.filters || {});
+      frag.appendChild(h('div', { class: 'card' }, [
+        h('div', { class: 't', text: 'Filters are applied automatically' }),
+        h('div', { class: 'd', text: 'Every coin page gets a verdict card (SKIP / HALF SIZE / BUY) and list pages are screened. The defaults are the research; switch a rule off only if you disagree with it.' })
+      ]));
+      frag.appendChild(h('div', { class: 'legend' }, Object.keys(F.VERDICTS).map(function (k) { return h('span', { class: 'pill', style: 'background:' + F.VERDICTS[k].color, text: F.VERDICTS[k].label }); })));
+      frag.appendChild(h('h3', { text: 'On trending / list pages, coins that fail are' }));
+      var modes = [['hide', 'Hidden'], ['dim', 'Dimmed'], ['badge', 'Badged only'], ['off', 'Not screened']];
+      frag.appendChild(h('div', { class: 'modes' }, modes.map(function (m) {
+        return h('button', { class: 'btn' + (settings.listMode === m[0] ? ' active' : ''), text: m[1], onclick: function () { settings.listMode = m[0]; saveSettings(); show('filters'); } });
+      })));
+      var groups = {};
+      F.RULES.forEach(function (r) { (groups[r.group] = groups[r.group] || []).push(r); });
+      Object.keys(groups).forEach(function (g) {
+        frag.appendChild(h('h3', { text: g }));
+        groups[g].forEach(function (r) {
+          var cb = h('input', { type: 'checkbox', onchange: function (ev) { settings.filters = settings.filters || {}; settings.filters[r.id] = ev.target.checked; saveSettings(); show('filters'); } });
+          cb.checked = en[r.id] !== false;
+          frag.appendChild(h('label', { class: 'rule' + (en[r.id] === false ? ' off' : '') }, [cb, h('div', {}, [
+            h('div', { class: 'l' }, [r.label, h('span', { class: 'sev ' + r.severity, text: r.severity })]),
+            h('div', { class: 'w', text: r.why })
+          ])]));
+        });
+      });
+      frag.appendChild(h('div', { class: 'row' }, [h('button', { class: 'btn', text: 'Reset to research defaults', onclick: function () { settings.filters = {}; saveSettings(); show('filters'); } })]));
+      return frag;
+    },
     score: function () {
       var frag = document.createDocumentFragment();
       var s = E.scoreSignals(quick);
@@ -145,13 +177,10 @@
   document.querySelectorAll('#tabs button').forEach(function (b) { b.addEventListener('click', function () { show(b.dataset.tab); }); });
 
   var enabled = document.getElementById('enabled');
-  chrome.storage.local.get({ settings: { enabled: true } }, function (r) { enabled.checked = r.settings.enabled !== false; });
-  enabled.addEventListener('change', function () {
-    chrome.storage.local.get({ settings: {} }, function (r) {
-      var s = Object.assign({ side: 'right', collapsed: false }, r.settings, { enabled: enabled.checked });
-      chrome.storage.local.set({ settings: s });
-    });
+  enabled.addEventListener('change', function () { settings.enabled = enabled.checked; saveSettings(); });
+  chrome.storage.local.get({ settings: null }, function (r) {
+    settings = Object.assign(settings, r.settings || {});
+    enabled.checked = settings.enabled !== false;
+    show('filters');
   });
-
-  show('score');
 })();

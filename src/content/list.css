@@ -1,0 +1,5 @@
+.mct-badge { display: inline-flex !important; align-items: center; gap: 4px; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font: 700 10px/1.6 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif; letter-spacing: .04em; vertical-align: middle; white-space: nowrap; color: #0a0d14; pointer-events: auto; cursor: help; }
+.mct-badge.reject { background: #ef4444; } .mct-badge.caution { background: #eab308; } .mct-badge.pass { background: #22c55e; } .mct-badge.unknown { background: #475569; color: #e2e8f0; }
+.mct-dim { opacity: .3 !important; filter: grayscale(.8); transition: opacity .15s; }
+.mct-dim:hover { opacity: .9 !important; filter: none; }
+.mct-hide { display: none !important; }
